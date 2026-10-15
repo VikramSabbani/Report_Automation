@@ -1,0 +1,14 @@
+
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+
+python-automation/downloads/
+python-automation/output/
+
+.env
+.env.*
+!.env.example
+
+frontend/dist/
