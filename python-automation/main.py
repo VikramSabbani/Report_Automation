@@ -64,66 +64,35 @@ def get_report_date():
 
 
 
+
 def login_and_open_reports(page):
-    """Navigate, log in if needed, and verify the reports interface."""
+    """Log in if needed, navigate from dashboard to Reports, and verify."""
 
     log("[1/4] Opening website...")
 
-    # Retry only when the source server returns an error or navigation fails.
-    last_error = None
+    response = page.goto(
+        REPORTS_URL,
+        wait_until="domcontentloaded",
+        timeout=30000,
+    )
 
-    for attempt in range(3):
-        try:
-            response = page.goto(
-                REPORTS_URL,
-                wait_until="domcontentloaded",
-                timeout=30000,
-            )
-
-            if response and response.status >= 500:
-                last_error = RuntimeError(
-                    f"Source website returned HTTP {response.status}"
-                )
-                if attempt < 2:
-                    page.wait_for_timeout(2000 * (attempt + 1))
-                    continue
-                raise last_error
-
-            break
-
-        except Exception as exc:
-            last_error = exc
-            if attempt == 2:
-                raise RuntimeError(
-                    f"Could not open source website after 3 attempts: {exc}"
-                ) from exc
-            page.wait_for_timeout(2000 * (attempt + 1))
+    if response and response.status >= 500:
+        raise RuntimeError(
+            f"Source website returned HTTP {response.status}"
+        )
 
     username_selector = 'input[name="username"]'
     password_selector = 'input[name="password"]'
 
-    # Wait briefly for either the report interface or the login form.
-    try:
-        page.locator(
-            f'{username_selector}, input[type="date"]'
-        ).first.wait_for(state="visible", timeout=8000)
-    except PlaywrightTimeoutError:
-        raise RuntimeError(
-            f"Neither login nor report interface appeared. "
-            f"URL={page.url}; title={page.title()}"
-        )
+    date_selector = (
+        'input[type="date"], '
+        'input[name*="date" i], '
+        'input[id*="date" i]'
+    )
 
-    username_selectors = [
-        'input[name="username"]',
-        'input[placeholder="Username"]',
-    ]
-    password_selectors = [
-        'input[name="password"]',
-        'input[placeholder="Password"]',
-    ]
-
-    username = page.locator(username_selectors[0]).first
-    password = page.locator(password_selectors[0]).first
+    # If redirected to login, submit the credentials.
+    username = page.locator(username_selector).first
+    password = page.locator(password_selector).first
 
     if username.is_visible() and password.is_visible():
         log("Login form detected.")
@@ -131,131 +100,71 @@ def login_and_open_reports(page):
         username.fill(os.getenv("REPORT_USERNAME", "admin"))
         password.fill(os.getenv("REPORT_PASSWORD", "1234"))
 
-        page.locator('button[type="submit"]').click(timeout=5000)
+        page.locator('button[type="submit"]').first.click(timeout=5000)
 
-    # Never assume login worked just because navigation completed.
-    date_selector = (
-        'input[type="date"], '
-        'input[name*="date" i], '
-        'input[id*="date" i]'
-    )
+        # Wait until login finishes and the dashboard appears.
+        try:
+            page.get_by_text(
+                "Welcome to X Company", exact=False
+            ).wait_for(state="visible", timeout=15000)
+        except PlaywrightTimeoutError as exc:
+            raise RuntimeError(
+                f"Login did not reach the dashboard. "
+                f"URL={page.url}; title={page.title()}; "
+                f"text={page.locator('body').inner_text()[:1000]}"
+            ) from exc
 
+    log(f"Current page after login: {page.url}")
+
+    # If the report date field is not already visible, open Reports.
+    date_field = page.locator(date_selector).first
+
+    if not date_field.is_visible():
+        reports_link = page.locator(
+            'a[href*="reports" i], button:has-text("Reports")'
+        ).first
+
+        if reports_link.count() == 0:
+            reports_link = page.get_by_text(
+                "Reports", exact=True
+            ).first
+
+        if reports_link.count() == 0:
+            raise RuntimeError(
+                f"Could not find the Reports navigation item. "
+                f"URL={page.url}; title={page.title()}"
+            )
+
+        log("Opening Reports section...")
+        reports_link.click(timeout=5000)
+
+    # Verify the actual report interface.
     try:
-        page.locator(date_selector).first.wait_for(
-            state="visible",
-            timeout=12000,
-        )
-    except PlaywrightTimeoutError:
-        body_text = page.locator("body").inner_text(timeout=3000)[:1500]
+        date_field.wait_for(state="visible", timeout=10000)
+    except PlaywrightTimeoutError as exc:
         raise RuntimeError(
-            f"Reports page did not appear after login. "
+            f"Reports page did not appear. "
             f"URL={page.url}; title={page.title()}; "
-            f"page text={body_text}"
-        )
+            f"text={page.locator('body').inner_text()[:1500]}"
+        ) from exc
 
-    # Confirm that the page exposes a download control too.
     download_selector = (
         'button:has-text("Download"), '
         'a:has-text("Download"), '
         'button:has-text("Export")'
     )
 
-    if page.locator(download_selector).count() == 0:
-        raise RuntimeError(
-            f"Date field appeared, but download control is missing. "
-            f"URL={page.url}"
+    try:
+        page.locator(download_selector).first.wait_for(
+            state="visible", timeout=5000
         )
+    except PlaywrightTimeoutError as exc:
+        raise RuntimeError(
+            f"Date field appeared, but the download button is missing. "
+            f"URL={page.url}; title={page.title()}"
+        ) from exc
 
     log(f"Reports page verified: {page.url}")
-
-
-    controls = page.locator(
-            "input, button, select, textarea"
-        ).evaluate_all("""elements => elements.map(el => ({
-            tag: el.tagName,
-            type: el.getAttribute('type'),
-            name: el.getAttribute('name'),
-            placeholder: el.getAttribute('placeholder'),
-            text: (el.innerText || '').slice(0, 80),
-            visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-        }))""")
-
-    print(f"AFTER LOGIN CONTROLS: {json.dumps(controls)}", flush=True)
-
-
-    # Wait for the login request and resulting page transition.
-    try:
-        page.wait_for_load_state("networkidle", timeout=15000)
-    except Exception:
-        pass
-
-    # Allow client-side navigation/rendering to complete.
-    for _ in range(15):
-        if (
-            not find_visible(page, username_selectors, timeout=500)
-            and (
-                find_visible(
-                        page,
-                        ['input[type="date"]',
-                         'input[name*="date" i]',
-                         'input[id*="date" i]'],
-                        timeout=500,
-                    )
-                    or find_visible(
-                        page,
-                        ['button:has-text("Download")',
-                         'button:has-text("Export")'],
-                        timeout=500,
-                    )
-                )
-            ):
-                break
-        page.wait_for_timeout(1000)
-
-    # Only navigate to /reports if the login form is no longer visible.
-    if find_visible(page, username_selectors, timeout=1000):
-        raise RuntimeError(
-            "Login did not complete. The login form is still visible. "
-            "Check REPORT_USERNAME and REPORT_PASSWORD in Render."
-        )
-
-    if "/reports" not in page.url:
-        page.goto(REPORTS_URL, wait_until="domcontentloaded", timeout=60000)
-
-    # Verify that the destination is genuinely the reports page.
-    date_field = find_visible(
-        page,
-        [
-            'input[type="date"]',
-            'input[name*="date" i]',
-            'input[id*="date" i]',
-        ],
-        timeout=10000,
-    )
-
-    download_button = find_visible(
-        page,
-        [
-            'button:has-text("Download")',
-            'button:has-text("Export")',
-        ],
-        timeout=3000,
-    )
-
-    if not date_field or not download_button:
-        print(f"FINAL URL: {page.url}", flush=True)
-        print(f"FINAL TITLE: {page.title()}", flush=True)
-        print(
-            "FINAL PAGE TEXT:\n"
-            + page.locator("body").inner_text(timeout=5000)[:3000],
-            flush=True,
-        )
-        raise RuntimeError(
-            "Login or reports-page verification failed. "
-            "The date field or download button is missing."
-        )
-
-    print(f"Reports page verified: {page.url}", flush=True)
 
 def select_report_date(page, report_date):
     """Wait for the report date field and fill it."""
