@@ -70,16 +70,57 @@ def login_and_open_reports(page):
 
     log("[1/4] Opening website...")
 
-    response = page.goto(
-        REPORTS_URL,
-        wait_until="domcontentloaded",
-        timeout=30000,
-    )
+    
+    response = None
+    retry_delays = [5, 10, 15, 20]
 
-    if response and response.status >= 500:
-        raise RuntimeError(
-            f"Source website returned HTTP {response.status}"
-        )
+    for attempt in range(5):
+        try:
+            response = page.goto(
+                REPORTS_URL,
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+        except Exception as exc:
+            if attempt == 4:
+                raise RuntimeError(
+                    f"Could not open source website after 5 attempts: {exc}"
+                ) from exc
+
+            delay = retry_delays[attempt]
+            log(
+                f"Navigation failed on attempt {attempt + 1}/5. "
+                f"Retrying in {delay} seconds..."
+            )
+            page.wait_for_timeout(delay * 1000)
+            continue
+
+        if response and response.status in (500, 502, 503, 504):
+            status = response.status
+
+            if attempt == 4:
+                raise RuntimeError(
+                    f"Source website remained unavailable after "
+                    f"5 attempts. Last HTTP status: {status}"
+                )
+
+            delay = retry_delays[attempt]
+            log(
+                f"Source website returned HTTP {status} "
+                f"on attempt {attempt + 1}/5. "
+                f"Retrying in {delay} seconds..."
+            )
+            page.wait_for_timeout(delay * 1000)
+            continue
+
+        if response and response.status >= 400:
+            raise RuntimeError(
+                f"Source website returned HTTP {response.status}"
+            )
+
+        log(f"Source website responded successfully on attempt {attempt + 1}.")
+        break
+
 
     username_selector = 'input[name="username"]'
     password_selector = 'input[name="password"]'
