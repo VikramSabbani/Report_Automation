@@ -181,13 +181,33 @@ def login_and_open_reports(page):
       log(f"DEBUG URL: {page.url}")
       log(f"DEBUG TITLE: {page_title}")
       log(f"DEBUG PAGE TEXT:\n{page_text}")
-      log(f"DEBUG DATE FIELD FOUND: {date_field is not None}")
-      log(f"DEBUG DOWNLOAD BUTTON FOUND: {download_button is not None}")
+      try:
+            controls = page.locator(
+                "input, button, select, textarea"
+            ).evaluate_all("""
+                elements => elements.map(el => ({
+                    tag: el.tagName,
+                    type: el.getAttribute('type'),
+                    name: el.getAttribute('name'),
+                    id: el.id,
+                    placeholder: el.getAttribute('placeholder'),
+                    text: (el.innerText || el.value || '').slice(0, 100),
+                    visible: !!(el.offsetWidth || el.offsetHeight ||
+                                el.getClientRects().length)
+                }))
+            """)
 
-      raise RuntimeError(
-          "Could not verify the reports page. "
-          "See DEBUG output above for the actual page content."
-      )
+            log(f"DEBUG FORM CONTROLS: {json.dumps(controls)}")
+            
+      except Exception as debug_error:
+                  log(f"Could not inspect form controls: {debug_error}")
+                  log(f"DEBUG DATE FIELD FOUND: {date_field is not None}")
+                  log(f"DEBUG DOWNLOAD BUTTON FOUND: {download_button is not None}")
+      
+                  raise RuntimeError(
+                      "Could not verify the reports page. "
+                      "See DEBUG output above for the actual page content."
+                  )
 
     log(f"Reports page verified: {page.url}")
 
