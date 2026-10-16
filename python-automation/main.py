@@ -212,26 +212,69 @@ def login_and_open_reports(page):
     log(f"Reports page verified: {page.url}")
 
 
+
 def select_report_date(page, report_date):
-    """Fill the report date field."""
-    date_field = find_visible(
-        page,
-        [
-            'input[type="date"]',
-            'input[name*="date" i]',
-            'input[id*="date" i]',
-        ],
-        timeout=5000,
-    )
+    """Wait for the report date field and fill it."""
+    date_selectors = [
+        'input[type="date"]',
+        'input[name*="date" i]',
+        'input[id*="date" i]',
+    ]
+
+    date_field = None
+
+    # Allow the reports interface time to render.
+    for attempt in range(12):
+        date_field = find_visible(
+            page,
+            date_selectors,
+            timeout=2000,
+        )
+
+        if date_field:
+            break
+
+        time.sleep(2)
 
     if not date_field:
-        raise RuntimeError("Could not find the report date field.")
+        # Print the actual page details to diagnose the selector.
+        try:
+            log(f"DATE DEBUG URL: {page.url}")
+            log(f"DATE DEBUG TITLE: {page.title()}")
+            log(
+                "DATE DEBUG TEXT:\n"
+                + page.locator("body").inner_text(timeout=5000)[:2000]
+            )
+
+            controls = page.locator(
+                "input, button, select"
+            ).evaluate_all("""
+                elements => elements.map(el => ({
+                    tag: el.tagName,
+                    type: el.getAttribute('type'),
+                    name: el.getAttribute('name'),
+                    placeholder: el.getAttribute('placeholder'),
+                    text: (el.innerText || '').slice(0, 80),
+                    visible: !!(el.offsetWidth || el.offsetHeight ||
+                                el.getClientRects().length)
+                }))
+            """)
+
+            log(f"DATE DEBUG CONTROLS: {json.dumps(controls)}")
+
+        except Exception as debug_error:
+            log(f"Date diagnostics failed: {debug_error}")
+
+        raise RuntimeError(
+            "Could not find the report date field after waiting."
+        )
 
     date_field.fill(report_date)
-    date_field.dispatch_event("change")
     date_field.dispatch_event("input")
+    date_field.dispatch_event("change")
 
     log(f"Selected report date: {report_date}")
+
 
 
 def download_csv(page, report_date):
