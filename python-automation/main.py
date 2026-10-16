@@ -96,7 +96,56 @@ def login_and_open_reports(page):
         if not login_button:
             raise RuntimeError("Login button was not found.")
 
-        login_button.click()
+        
+        # Capture browser errors and HTTP responses during login.
+        page.on(
+            "pageerror",
+            lambda error: print(f"BROWSER PAGE ERROR: {error}", flush=True),
+        )
+
+        page.on(
+            "console",
+            lambda message: print(
+                f"BROWSER CONSOLE ERROR: {message.text}", flush=True
+            ) if message.type == "error" else None,
+        )
+
+        page.on(
+            "response",
+            lambda response: print(
+                f"HTTP RESPONSE: {response.status} {response.url}",
+                flush=True,
+            ) if response.status >= 400 else None,
+        )
+
+        print("Submitting login form...", flush=True)
+        print(f"Username field filled: {bool(username_field.input_value())}", flush=True)
+        print(f"Password field filled: {bool(password_field.input_value())}", flush=True)
+
+        login_button.click(timeout=5000)
+        page.wait_for_timeout(2000)
+
+        print(f"AFTER LOGIN URL: {page.url}", flush=True)
+        print(f"AFTER LOGIN TITLE: {page.title()}", flush=True)
+        print(
+            "AFTER LOGIN TEXT:\n"
+            + page.locator("body").inner_text(timeout=5000)[:3000],
+            flush=True,
+        )
+
+        controls = page.locator(
+            "input, button, select, textarea"
+        ).evaluate_all("""elements => elements.map(el => ({
+            tag: el.tagName,
+            type: el.getAttribute('type'),
+            name: el.getAttribute('name'),
+            placeholder: el.getAttribute('placeholder'),
+            text: (el.innerText || '').slice(0, 80),
+            visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+        }))""")
+
+        print(f"AFTER LOGIN CONTROLS: {json.dumps(controls)}", flush=True)
+
 
         # Wait for the login request and resulting page transition.
         try:
