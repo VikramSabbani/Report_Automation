@@ -62,90 +62,82 @@ def get_report_date():
     return report_date
 
 
+
 def login_and_open_reports(page):
-    """Open the site, log in if required, and open the reports page."""
-    log("[1/4] Opening website...")
+    """Log in and verify that the reports page is actually accessible."""
 
-    page.goto(
-        REPORTS_URL,
-        wait_until="domcontentloaded",
-        timeout=60_000,
-    )
+    print("[1/4] Opening website...", flush=True)
+    page.goto(REPORTS_URL, wait_until="domcontentloaded", timeout=60000)
 
-    # The site may take some time to wake up on its hosting platform.
-    username_field = None
-    password_field = None
+    username_selectors = [
+        'input[name="username"]',
+        'input[placeholder="Username"]',
+    ]
+    password_selectors = [
+        'input[name="password"]',
+        'input[placeholder="Password"]',
+    ]
+    login_button_selectors = [
+        'button[type="submit"]',
+        'button:has-text("Login")',
+    ]
 
-    for attempt in range(24):
-        username_field = find_visible(
-            page,
-            [
-                'input[name="username"]',
-                'input[name="email"]',
-                'input[type="email"]',
-                'input[placeholder*="username" i]',
-                'input[placeholder*="email" i]',
-                'input[type="text"]',
-            ],
-        )
-
-        password_field = find_visible(
-            page,
-            [
-                'input[name="password"]',
-                'input[type="password"]',
-            ],
-        )
-
-        if username_field and password_field:
-            break
-
-        if "/reports" in page.url.lower():
-            break
-
-        if attempt < 23:
-            time.sleep(5)
-            try:
-                page.reload(
-                    wait_until="domcontentloaded",
-                    timeout=30_000,
-                )
-            except PlaywrightTimeoutError:
-                pass
+    username_field = find_visible(page, username_selectors)
+    password_field = find_visible(page, password_selectors)
 
     if username_field and password_field:
-        log("[2/4] Login page loaded.")
+        print("Login form detected. Entering credentials...", flush=True)
 
-        username_field.fill(USERNAME)
-        password_field.fill(PASSWORD)
+        username_field.fill(os.getenv("REPORT_USERNAME", "admin"))
+        password_field.fill(os.getenv("REPORT_PASSWORD", "1234"))
 
-        login_button = find_visible(
-            page,
-            [
-                'button:has-text("Login")',
-                'button:has-text("Log in")',
-                'input[type="submit"]',
-                'button[type="submit"]',
-            ],
-        )
+        login_button = find_visible(page, login_button_selectors)
 
         if not login_button:
-            raise RuntimeError("Could not find the login button.")
+            raise RuntimeError("Login button was not found.")
 
         login_button.click()
-        page.wait_for_load_state(
-            "domcontentloaded",
-            timeout=30_000,
+
+        # Wait for the login request and resulting page transition.
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            pass
+
+        # Allow client-side navigation/rendering to complete.
+        for _ in range(15):
+            if (
+                not find_visible(page, username_selectors, timeout=500)
+                and (
+                    find_visible(
+                        page,
+                        ['input[type="date"]',
+                         'input[name*="date" i]',
+                         'input[id*="date" i]'],
+                        timeout=500,
+                    )
+                    or find_visible(
+                        page,
+                        ['button:has-text("Download")',
+                         'button:has-text("Export")'],
+                        timeout=500,
+                    )
+                )
+            ):
+                break
+            page.wait_for_timeout(1000)
+
+    # Only navigate to /reports if the login form is no longer visible.
+    if find_visible(page, username_selectors, timeout=1000):
+        raise RuntimeError(
+            "Login did not complete. The login form is still visible. "
+            "Check REPORT_USERNAME and REPORT_PASSWORD in Render."
         )
 
-    # Navigate directly to the required page after authentication.
-    if "/reports" not in page.url.lower():
-        page.goto(
-            REPORTS_URL,
-            wait_until="domcontentloaded",
-            timeout=60_000,
-        )
+    if "/reports" not in page.url:
+        page.goto(REPORTS_URL, wait_until="domcontentloaded", timeout=60000)
 
+    # Verify that the destination is genuinely the reports page.
     date_field = find_visible(
         page,
         [
@@ -153,65 +145,32 @@ def login_and_open_reports(page):
             'input[name*="date" i]',
             'input[id*="date" i]',
         ],
-        timeout=5000,
+        timeout=10000,
     )
 
     download_button = find_visible(
         page,
         [
-            'button:has-text("Download Report")',
             'button:has-text("Download")',
-            'a:has-text("Download Report")',
+            'button:has-text("Export")',
         ],
-        timeout=5000,
+        timeout=3000,
     )
 
     if not date_field or not download_button:
-      try:
-          page_title = page.title()
-      except Exception:
-          page_title = "(could not read page title)"
+        print(f"FINAL URL: {page.url}", flush=True)
+        print(f"FINAL TITLE: {page.title()}", flush=True)
+        print(
+            "FINAL PAGE TEXT:\n"
+            + page.locator("body").inner_text(timeout=5000)[:3000],
+            flush=True,
+        )
+        raise RuntimeError(
+            "Login or reports-page verification failed. "
+            "The date field or download button is missing."
+        )
 
-      try:
-          page_text = page.locator("body").inner_text(timeout=5000)
-          page_text = page_text[:1500]
-      except Exception:
-          page_text = "(could not read page text)"
-
-      log(f"DEBUG URL: {page.url}")
-      log(f"DEBUG TITLE: {page_title}")
-      log(f"DEBUG PAGE TEXT:\n{page_text}")
-      try:
-            controls = page.locator(
-                "input, button, select, textarea"
-            ).evaluate_all("""
-                elements => elements.map(el => ({
-                    tag: el.tagName,
-                    type: el.getAttribute('type'),
-                    name: el.getAttribute('name'),
-                    id: el.id,
-                    placeholder: el.getAttribute('placeholder'),
-                    text: (el.innerText || el.value || '').slice(0, 100),
-                    visible: !!(el.offsetWidth || el.offsetHeight ||
-                                el.getClientRects().length)
-                }))
-            """)
-
-            log(f"DEBUG FORM CONTROLS: {json.dumps(controls)}")
-            
-      except Exception as debug_error:
-                  log(f"Could not inspect form controls: {debug_error}")
-                  log(f"DEBUG DATE FIELD FOUND: {date_field is not None}")
-                  log(f"DEBUG DOWNLOAD BUTTON FOUND: {download_button is not None}")
-      
-                  raise RuntimeError(
-                      "Could not verify the reports page. "
-                      "See DEBUG output above for the actual page content."
-                  )
-
-    log(f"Reports page verified: {page.url}")
-
-
+    print(f"Reports page verified: {page.url}", flush=True)
 
 def select_report_date(page, report_date):
     """Wait for the report date field and fill it."""
