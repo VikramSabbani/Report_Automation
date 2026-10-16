@@ -123,13 +123,15 @@ app.post("/api/reports", (req, res) => {
     }
 
     if (code !== 0) {
-      console.error("Python automation failed:", stderr || stdout);
+      console.error("Python automation failed.");
+      console.error("Python stdout:\n", stdout);
+      console.error("Python stderr:\n", stderr);
 
       return res.status(500).json({
         success: false,
         message: "Report generation failed.",
         details: (stderr || stdout || "No error details available.").slice(
-          -3000,
+          -8000,
         ),
       });
     }
